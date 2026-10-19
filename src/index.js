@@ -23,7 +23,7 @@ function parseField(field, text) {
     if (part === "") throw new SyntaxError(`cron: empty item in the ${field.name} field`);
     const [range, stepText, extra] = part.split("/");
     if (extra !== undefined) throw new SyntaxError(`cron: "${part}" has two steps`);
-    const step = stepText === undefined ? 1 : Number(stepText);
+    const step = stepText === undefined ? 1 : /^\d+$/.test(stepText) ? Number(stepText) : NaN;
     if (!Number.isInteger(step) || step < 1) throw new SyntaxError(`cron: step "${stepText}" in the ${field.name} field must be a whole number of at least 1`);
     let from;
     let to;
@@ -56,7 +56,7 @@ export function parseCron(expression) {
   const parts = text.split(/\s+/);
   if (parts.length !== 5) throw new SyntaxError(`cron: expected 5 fields (minute hour day month weekday), got ${parts.length}`);
   const [minute, hour, day, month, weekday] = FIELDS.map((f, i) => parseField(f, parts[i]));
-  return { minute, hour, day, month, weekday, dayRestricted: parts[2] !== "*" && !parts[2].startsWith("*/"), weekdayRestricted: parts[4] !== "*" && !parts[4].startsWith("*/") };
+  return { minute, hour, day, month, weekday, dayRestricted: !parts[2].startsWith("*"), weekdayRestricted: !parts[4].startsWith("*") };
 }
 
 const get = (date, utc) => ({
@@ -83,37 +83,34 @@ export function matches(expression, date = new Date(), { utc = false } = {}) {
 }
 
 /**
- * The first matching minute strictly after `from`. Local time by default, `{ utc: true }` for UTC. Looks at most about five
- * years ahead (so "30 Feb" gives null). In local time, a time that does not exist because of the clock change does not run, and
+ * The first matching minute strictly after `from`. Local time by default, `{ utc: true }` for UTC. Looks at most nine
+ * years ahead (so "30 Feb" gives null, and 29 February is still found across a skipped leap year). In local time, a time that does not exist because of the clock change does not run, and
  * a time that exists twice runs twice.
  */
 export function nextRun(expression, from = new Date(), { utc = false } = {}) {
   const cron = typeof expression === "string" ? parseCron(expression) : expression;
-  const d = new Date(from.getTime());
-  d.setSeconds(0, 0);
-  d.setMinutes(d.getMinutes() + 1);
-  const limit = from.getTime() + 5 * 366 * 86_400_000;
-  const set = {
-    date: (n) => (utc ? d.setUTCDate(n) : d.setDate(n)),
-    hours: (h, m) => (utc ? d.setUTCHours(h, m, 0, 0) : d.setHours(h, m, 0, 0)),
-    minutes: (m) => (utc ? d.setUTCMinutes(m, 0, 0) : d.setMinutes(m, 0, 0))
-  };
-  while (d.getTime() < limit) {
-    const p = get(d, utc);
+  // All stepping is plain arithmetic on the timestamp. The local-time setters (setMinutes, setHours, setDate) pick the first of
+  // two equal wall-clock times, which can move the cursor back across a clock change.
+  let t = Math.floor(from.getTime() / 60_000) * 60_000 + 60_000;
+  const limit = from.getTime() + 9 * 366 * 86_400_000;
+  while (t < limit) {
+    const p = get(new Date(t), utc);
     if (!dayMatches(cron, p)) {
-      set.date(p.day + 1);
-      set.hours(0, 0);
+      // Towards the next midnight. In local time a clock change can make the real distance an hour shorter or longer, so stay
+      // two hours short and look again; that can never skip a matching minute.
+      const left = (24 - p.hour) * 60 - p.minute;
+      t += (utc ? left : Math.max(60, left - 120)) * 60_000;
       continue;
     }
     if (!cron.hour.has(p.hour)) {
-      set.hours(p.hour + 1, 0);
+      t += (60 - p.minute) * 60_000;
       continue;
     }
     if (!cron.minute.has(p.minute)) {
-      set.minutes(p.minute + 1);
+      t += 60_000;
       continue;
     }
-    return new Date(d.getTime());
+    return new Date(t);
   }
   return null;
 }
@@ -121,6 +118,7 @@ export function nextRun(expression, from = new Date(), { utc = false } = {}) {
 /** The next `count` runs after `from`. */
 export function nextRuns(expression, count, from = new Date(), options) {
   const cron = typeof expression === "string" ? parseCron(expression) : expression;
+  if (!Number.isInteger(count) || count < 0) throw new RangeError("cron: count must be a whole number of at least 0");
   const out = [];
   let at = from;
   while (out.length < count) {
@@ -135,6 +133,11 @@ export function nextRuns(expression, count, from = new Date(), options) {
 /** A short English description for the common cases, or the expression itself. */
 export function describe(expression) {
   const text = (ALIASES[expression.trim().toLowerCase()] ?? expression.trim());
+  try {
+    parseCron(text);
+  } catch {
+    return text;
+  }
   const known = {
     "* * * * *": "every minute", "0 * * * *": "every hour", "0 0 * * *": "every day at 00:00", "0 0 * * 0": "every Sunday at 00:00",
     "0 0 1 * *": "on the 1st of every month at 00:00", "0 0 1 1 *": "every year on 1 January at 00:00"
@@ -143,6 +146,6 @@ export function describe(expression) {
   const m = /^(\d+) (\d+) \* \* \*$/.exec(text);
   if (m) return `every day at ${m[2].padStart(2, "0")}:${m[1].padStart(2, "0")}`;
   const every = /^\*\/(\d+) \* \* \* \*$/.exec(text);
-  if (every) return `every ${every[1]} minutes`;
+  if (every && 60 % Number(every[1]) === 0) return Number(every[1]) === 1 ? "every minute" : `every ${every[1]} minutes`;
   return text;
 }

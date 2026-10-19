@@ -39,9 +39,9 @@ Each field takes `*`, a number, a list (`1,15`), a range (`9-17`), and steps (`*
 ## Details that matter
 
 - `nextRun` is the first matching minute **strictly after** `from`. Seconds are ignored.
-- **Day and weekday together mean "either"**, as in classic cron: `0 0 13 * fri` is every 13th *and* every Friday. A field that starts with `*` (also `*/2`) counts as not restricted, so `0 0 */2 * fri` means "every second day *and* a Friday".
+- **Day and weekday together mean "either"**, as in classic cron: `0 0 13 * fri` is every 13th *and* every Friday. A field that starts with `*` (also `*/2` or `*,5`) counts as not restricted, so `0 0 */2 * fri` means "every second day *and* a Friday".
 - **Local time or UTC.** Local is the default. In local time a time that does not exist (the clock jumps forward) does not run, and a time that happens twice (the clock goes back) runs twice. Use `{ utc: true }` for schedules that must not move.
-- Impossible dates (`0 0 30 2 *`) give `null` after looking about five years ahead.
+- Impossible dates (`0 0 30 2 *`) give `null` after looking nine years ahead (the longest gap between two 29 Februaries is eight).
 - A bad expression throws a `SyntaxError` or `RangeError` that says which field is wrong.
 
 This package finds the times; it does not run anything. Combine it with a `setTimeout` loop, or let the system cron do the running.

@@ -10,6 +10,8 @@ Read cron expressions and find out when they run next. For scheduling jobs on a 
 npm install @sandsoftwaresolutions/cron-next
 ```
 
+Works with `import` and `require()`, and ships TypeScript types for both.
+
 ## Usage
 
 ```js
